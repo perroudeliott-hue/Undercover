@@ -39,7 +39,7 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
-# --- INITIALISATION & RECONNEXION AUTOMATIQUE ---
+# --- INITIALISATION ---
 if "page" not in st.session_state:
     st.session_state.page = "accueil"
     st.session_state.nom_joueur = ""
@@ -47,21 +47,19 @@ if "page" not in st.session_state:
     st.session_state.est_createur = False
     st.session_state.afficher_mot = False
     st.session_state.animation_jouee = False
+    st.session_state.verrou_action = False
+    st.session_state.dernier_statut = ""
 
-    # Le script vérifie l'URL pour voir s'il y a des traces d'une ancienne session
     if "pseudo" in st.query_params and "salon" in st.query_params:
         p_url = st.query_params["pseudo"]
         s_url = st.query_params["salon"]
         c_url = st.query_params.get("createur", "false") == "true"
         
-        # Vérification avec Supabase pour être sûr que la partie existe toujours
         verif = supabase.table("joueurs").select("*").eq("code_salon", s_url).eq("pseudo", p_url).execute().data
         if verif:
             st.session_state.nom_joueur = p_url
             st.session_state.code_salon = s_url
             st.session_state.est_createur = c_url
-            
-            # On vérifie l'état actuel de la partie pour le rediriger au bon endroit
             statut = supabase.table("salons").select("statut").eq("code_salon", s_url).execute().data
             if statut and statut[0]["statut"] == "attente":
                 st.session_state.page = "lobby"
@@ -81,8 +79,6 @@ def creer_salon(nom, avatar):
     st.session_state.code_salon = code
     st.session_state.est_createur = True
     st.session_state.page = "lobby"
-    
-    # Inscription dans l'URL
     st.query_params["pseudo"] = nom
     st.query_params["salon"] = code
     st.query_params["createur"] = "true"
@@ -102,8 +98,6 @@ def rejoindre_salon(nom, code, avatar):
     st.session_state.code_salon = code
     st.session_state.est_createur = False
     st.session_state.page = "lobby"
-    
-    # Inscription dans l'URL
     st.query_params["pseudo"] = nom
     st.query_params["salon"] = code
     st.query_params["createur"] = "false"
@@ -111,8 +105,6 @@ def rejoindre_salon(nom, code, avatar):
 def quitter_salon():
     if st.session_state.nom_joueur and st.session_state.code_salon:
         supabase.table("joueurs").delete().eq("pseudo", st.session_state.nom_joueur).eq("code_salon", st.session_state.code_salon).execute()
-    
-    # Nettoyage de l'URL et de la session
     st.query_params.clear()
     for key in list(st.session_state.keys()):
         del st.session_state[key]
@@ -166,6 +158,7 @@ def verifier_victoire(joueurs_en_vie):
     elif "Undercover" in roles_en_vie and nb_vivants <= 2: return "Undercover"
     elif "Mr. White" in roles_en_vie and nb_vivants <= 2: return "Mr. White"
     return None
+
 
 # ==========================================
 # ÉCRAN 1 : L'ACCUEIL
@@ -222,8 +215,6 @@ elif st.session_state.page == "lobby":
         with col2: nb_w = st.number_input("Mr. White", min_value=0, max_value=max(0, nb_joueurs-nb_u-1), value=0)
         st.write("")
         if st.button("🚀 Lancer la partie", type="primary", use_container_width=True):
-            try: supabase.table("salons").update({"vainqueur": None, "cibles_egalite": None}).eq("code_salon", st.session_state.code_salon).execute()
-            except: pass
             lancer_partie(st.session_state.code_salon, nb_u, nb_w)
             st.rerun()
     else:
@@ -247,6 +238,11 @@ elif st.session_state.page == "jeu":
         
     statut_actuel = salon_info[0]["statut"]
     vainqueur_actuel = salon_info[0].get("vainqueur")
+
+    # GESTION DU VERROU (Évite l'écran blanc)
+    if st.session_state.dernier_statut != statut_actuel:
+        st.session_state.verrou_action = False
+        st.session_state.dernier_statut = statut_actuel
     
     tous_les_joueurs = supabase.table("joueurs").select("*").eq("code_salon", st.session_state.code_salon).execute().data
     mon_profil = next((j for j in tous_les_joueurs if j["pseudo"] == st.session_state.nom_joueur), None)
@@ -310,7 +306,10 @@ elif st.session_state.page == "jeu":
         st.markdown('<div class="app-title">🗳️ Phase de Vote</div>', unsafe_allow_html=True)
         a_vote = [j for j in joueurs_en_vie if j["vote_contre"] is not None]
         
-        if len(a_vote) == len(joueurs_en_vie) and len(joueurs_en_vie) > 0:
+        # Le verrou garantit que cette logique lourde ne s'exécute qu'une seule fois
+        if len(a_vote) == len(joueurs_en_vie) and len(joueurs_en_vie) > 0 and not st.session_state.verrou_action:
+            st.session_state.verrou_action = True
+            
             votes = [j["vote_contre"] for j in a_vote]
             compte = Counter(votes)
             top_votes = compte.most_common()
@@ -327,8 +326,11 @@ elif st.session_state.page == "jeu":
                 supabase.table("joueurs").update({"est_elimine": True}).eq("code_salon", st.session_state.code_salon).eq("pseudo", joueur_elimine).execute()
                 nouveaux_survivants = [j for j in joueurs_en_vie if j["pseudo"] != joueur_elimine]
                 gagnant = verifier_victoire(nouveaux_survivants)
-                if gagnant: supabase.table("salons").update({"statut": "victoire", "vainqueur": gagnant}).eq("code_salon", st.session_state.code_salon).execute()
-                else: supabase.table("salons").update({"statut": "resultats"}).eq("code_salon", st.session_state.code_salon).execute()
+                
+                if gagnant: 
+                    supabase.table("salons").update({"statut": "victoire", "vainqueur": gagnant}).eq("code_salon", st.session_state.code_salon).execute()
+                else: 
+                    supabase.table("salons").update({"statut": "resultats"}).eq("code_salon", st.session_state.code_salon).execute()
                 st.rerun()
 
         if mon_profil and not mon_profil["est_elimine"]:
@@ -355,23 +357,58 @@ elif st.session_state.page == "jeu":
         st.warning(f"🚨 Égalité parfaite entre **{' et '.join(cibles_list)}** ! \n\nVous avez 30 secondes pour vous défendre avant l'ultime vote de départage.")
         a_vote = [j for j in joueurs_en_vie if j["vote_contre"] is not None]
         
-        if len(a_vote) == len(joueurs_en_vie) and len(joueurs_en_vie) > 0:
+        if len(a_vote) == len(joueurs_en_vie) and len(joueurs_en_vie) > 0 and not st.session_state.verrou_action:
+            st.session_state.verrou_action = True
+            
             votes = [j["vote_contre"] for j in a_vote]
             compte = Counter(votes)
             top_votes = compte.most_common()
             joueur_elimine = top_votes[0][0]
+            
             supabase.table("joueurs").update({"est_elimine": True}).eq("code_salon", st.session_state.code_salon).eq("pseudo", joueur_elimine).execute()
             nouveaux_survivants = [j for j in joueurs_en_vie if j["pseudo"] != joueur_elimine]
             gagnant = verifier_victoire(nouveaux_survivants)
             
             if gagnant: 
-                supabase.table("salons").update({
-                    "statut": "victoire", 
-                    "vainqueur": gagnant, 
-                    "cibles_egalite": None
-                }).eq("code_salon", st.session_state.code_salon).execute()
+                supabase.table("salons").update({"statut": "victoire", "vainqueur": gagnant, "cibles_egalite": None}).eq("code_salon", st.session_state.code_salon).execute()
             else: 
-                supabase.table("salons").update({
-                    "statut": "resultats", 
-                    "cibles_egalite": None
-                }).eq("code_salon", st.session_state.code_salon).execute()
+                supabase.table("salons").update({"statut": "resultats", "cibles_egalite": None}).eq("code_salon", st.session_state.code_salon).execute()
+            st.rerun()
+
+        if mon_profil and not mon_profil["est_elimine"]:
+            if mon_profil["vote_contre"]: st.success("✅ Tu as revoté !")
+            else:
+                st.write("Choisis qui doit être éliminé :")
+                st.markdown('<div class="vote-btn">', unsafe_allow_html=True)
+                for cible in cibles_list:
+                    avatar_cible = next((j["avatar"] for j in joueurs_en_vie if j["pseudo"] == cible), "👤")
+                    if st.button(f"👉 Voter contre {avatar_cible} {cible}", key=f"revote_{cible}"):
+                        supabase.table("joueurs").update({"vote_contre": cible}).eq("id", mon_profil["id"]).execute()
+                        st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+        else: st.error("💀 Tu es éliminé, tu ne peux pas voter.")
+             
+        st.write("---")
+        st.caption(f"Votes de départage enregistrés : {len(a_vote)} / {len(joueurs_en_vie)}")
+
+    # --- PHASE C : RÉSULTATS INTERMÉDIAIRES ---
+    elif statut_actuel == "resultats":
+        st.markdown('<div class="app-title">💀 Résultat</div>', unsafe_allow_html=True)
+        elimines = [j for j in tous_les_joueurs if j["est_elimine"]]
+        st.subheader("Le village a tranché...")
+        dernier_elimine = next((e for e in elimines if e.get("vote_contre") or e["est_elimine"]), None)
+        
+        if dernier_elimine:
+             avatar_e = dernier_elimine.get("avatar", "👤")
+             st.error(f"**{avatar_e} {dernier_elimine['pseudo']}** a été éliminé !")
+             st.write(f"Son rôle était : **{dernier_elimine['role']}**")
+             if dernier_elimine["role"] != "Mr. White": st.write(f"Son mot était : {dernier_elimine['mot_attribue']}")
+        
+        st.write("---")
+        if st.session_state.est_createur:
+            st.write("L'imposteur est toujours là...")
+            if st.button("Nouveau tour (Continuer la partie)", type="primary"):
+                nouveau_tour(st.session_state.code_salon)
+                st.rerun()
+        else:
+            st.info("⏳ En attente du créateur pour la suite...")
