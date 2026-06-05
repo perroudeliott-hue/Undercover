@@ -9,19 +9,16 @@ st.set_page_config(page_title="Undercover", page_icon="🕵️‍♂️", layout
 # --- INJECTION CSS (DESIGN DE L'APPLICATION) ---
 st.markdown("""
     <style>
-    /* Masquer le menu, le header et le footer de Streamlit */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Réduire l'espace vide en haut pour les mobiles */
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
         max-width: 600px;
     }
     
-    /* Style général des boutons (façon App Mobile) */
     .stButton > button {
         width: 100%;
         border-radius: 25px;
@@ -33,13 +30,11 @@ st.markdown("""
         transition: all 0.2s ease-in-out;
     }
     
-    /* Boutons secondaires au survol */
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
     }
 
-    /* Style spécifique pour le bouton Primaire (Rouge Undercover) */
     .stButton > button[kind="primary"] {
         background-color: #E63946;
         color: white;
@@ -48,7 +43,6 @@ st.markdown("""
         background-color: #D62828;
     }
     
-    /* Titres stylisés */
     .app-title {
         text-align: center;
         font-size: 2.5rem;
@@ -63,7 +57,6 @@ st.markdown("""
         opacity: 0.8;
     }
     
-    /* Conteneurs pour faire des "Cartes" */
     .card {
         background-color: rgba(255, 255, 255, 0.05);
         padding: 1.5rem;
@@ -143,14 +136,17 @@ def lancer_partie(code, nb_undercover, nb_white):
         roles.append("Civil")
     random.shuffle(roles)
     
+    civils_pseudos = []
+    
     for i, joueur in enumerate(joueurs):
         role_attribue = roles[i]
         if role_attribue == "Undercover":
             mot_attribue = paire["mot_undercover"]
         elif role_attribue == "Mr. White":
-            mot_attribue = "Tu n'as pas de mot. Fais semblant !"
+            mot_attribue = "Aucun"
         else:
             mot_attribue = paire["mot_civil"]
+            civils_pseudos.append(joueur["pseudo"])
             
         supabase.table("joueurs").update({
             "role": role_attribue, 
@@ -159,11 +155,14 @@ def lancer_partie(code, nb_undercover, nb_white):
             "vote_contre": None
         }).eq("id", joueur["id"]).execute()
         
-    supabase.table("salons").update({"statut": "en_jeu"}).eq("code_salon", code).execute()
+    # Tirage au sort d'un Civil pour commencer
+    joueur_qui_commence = random.choice(civils_pseudos) if civils_pseudos else joueurs[0]["pseudo"]
+        
+    supabase.table("salons").update({"statut": "en_jeu", "premier_joueur": joueur_qui_commence}).eq("code_salon", code).execute()
     st.session_state.afficher_mot = False
 
 def terminer_manche(code):
-    supabase.table("salons").update({"statut": "attente"}).eq("code_salon", code).execute()
+    supabase.table("salons").update({"statut": "attente", "premier_joueur": None}).eq("code_salon", code).execute()
     supabase.table("joueurs").update({"est_elimine": False, "vote_contre": None}).eq("code_salon", code).execute()
     st.session_state.afficher_mot = False
     st.session_state.page = "lobby"
@@ -227,7 +226,7 @@ elif st.session_state.page == "lobby":
         with col2:
             nb_w = st.number_input("Mr. White", min_value=0, max_value=max(0, nb_joueurs-nb_u-1), value=0)
             
-        st.write("") # Espace
+        st.write("")
         if st.button("🚀 Lancer la partie", type="primary", use_container_width=True):
             lancer_partie(st.session_state.code_salon, nb_u, nb_w)
             st.rerun()
@@ -240,13 +239,17 @@ elif st.session_state.page == "lobby":
 elif st.session_state.page == "jeu":
     st_autorefresh(interval=3000, limit=None, key="jeu_refresh")
     
-    statut_salon = supabase.table("salons").select("statut").eq("code_salon", st.session_state.code_salon).execute().data
-    if statut_salon and statut_salon[0]["statut"] == "attente":
+    salon_info = supabase.table("salons").select("statut, premier_joueur").eq("code_salon", st.session_state.code_salon).execute().data
+    if salon_info and salon_info[0]["statut"] == "attente":
         st.session_state.page = "lobby"
         st.session_state.afficher_mot = False
         st.rerun()
 
     st.markdown('<div class="app-title">🕵️‍♂️ En jeu</div>', unsafe_allow_html=True)
+    
+    # Affichage de la personne qui commence
+    if salon_info and salon_info[0].get("premier_joueur"):
+        st.info(f"🗣️ C'est **{salon_info[0]['premier_joueur']}** qui donne le premier mot !")
     
     tous_les_joueurs = supabase.table("joueurs").select("*").eq("code_salon", st.session_state.code_salon).execute().data
     mon_profil = next((j for j in tous_les_joueurs if j["pseudo"] == st.session_state.nom_joueur), None)
@@ -262,8 +265,12 @@ elif st.session_state.page == "jeu":
                     st.session_state.afficher_mot = not st.session_state.afficher_mot
                     
                 if st.session_state.afficher_mot:
-                    st.success(f"🔑 **Mot :** {mon_profil['mot_attribue']}")
-                    st.caption(f"Ton rôle : {mon_profil['role']}")
+                    if mon_profil["role"] == "Mr. White":
+                        st.success("🤫 **Tu es Mr. White !**")
+                        st.caption("Tu n'as pas de mot. Écoute les autres et bluffe !")
+                    else:
+                        st.success(f"🔑 **Ton mot :** {mon_profil['mot_attribue']}")
+                        # Le rôle exact n'est plus affiché pour préserver le mystère !
                 else:
                     st.info("🔒 Mot caché à l'abri des regards")
                 st.markdown('</div>', unsafe_allow_html=True)
