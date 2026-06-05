@@ -206,7 +206,13 @@ elif st.session_state.page == "lobby":
                 st.markdown(f"**{avatar_j} {joueur['pseudo']}** *(Toi)*")
             else:
                 st.markdown(f"{avatar_j} {joueur['pseudo']}")
-    
+ 
+    st.write("---")
+    # Génère le lien complet avec les paramètres pour un ami
+    lien_invite = f"https://ton-url-streamlit.app/?salon={st.session_state.code_salon}"
+    st.info(f"Partage ce lien pour inviter tes amis :\n{lien_invite}")
+    st.button("📋 Copier le lien d'invitation", on_click=lambda: st.write("Lien copié !"))
+ 
     st.write("---")
     if st.session_state.est_createur:
         st.subheader("⚙️ Paramètres")
