@@ -364,4 +364,14 @@ elif st.session_state.page == "jeu":
             nouveaux_survivants = [j for j in joueurs_en_vie if j["pseudo"] != joueur_elimine]
             gagnant = verifier_victoire(nouveaux_survivants)
             
-            if gagnant: supabase.table("
+            if gagnant: 
+                supabase.table("salons").update({
+                    "statut": "victoire", 
+                    "vainqueur": gagnant, 
+                    "cibles_egalite": None
+                }).eq("code_salon", st.session_state.code_salon).execute()
+            else: 
+                supabase.table("salons").update({
+                    "statut": "resultats", 
+                    "cibles_egalite": None
+                }).eq("code_salon", st.session_state.code_salon).execute()
